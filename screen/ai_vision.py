@@ -92,9 +92,19 @@ class AIVisualAnalyzer:
 }
 ```"""
 
-    def __init__(self):
+    def __init__(self, log_callback=None):
         self.client: Optional[OpenAI] = None
         self._last_api_key = None
+        self.log_callback = log_callback
+        
+    def set_log_callback(self, callback):
+        """Set logger callback"""
+        self.log_callback = callback
+        
+    def _log(self, message: str):
+        """Log message if callback is set"""
+        if self.log_callback:
+            self.log_callback(message)
         
     def _ensure_client(self) -> Any:
         """Ensure OpenAI client is initialized"""
@@ -114,6 +124,32 @@ class AIVisualAnalyzer:
             
         return config
         
+    def _call_api_with_retry(self, messages: List[Dict], max_tokens: int = 800, temperature: float = 0.3) -> str:
+        """Call OpenAI API with retry logic"""
+        config = self._ensure_client()
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=config.openai_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                last_error = e
+                self._log(f"⚠️ AI分析失败 (尝试 {attempt+1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(1)
+                    
+        self._log(f"❌ AI分析最终失败: {str(last_error)}")
+        raise last_error
+
     def _image_to_base64(self, image: np.ndarray) -> str:
         """Convert numpy image to base64"""
         _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -134,62 +170,48 @@ class AIVisualAnalyzer:
         Returns:
             Dictionary with analysis results including click position
         """
-        config = self._ensure_client()
-        
         prompt = self.MAP_ANALYSIS_PROMPT.format(target=target_location)
         
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._image_to_base64(map_image)}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": prompt}
-                    ]
-                }
-            ],
-            max_tokens=1000,
-            temperature=0.3
-        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{self._image_to_base64(map_image)}",
+                            "detail": "high"
+                        }
+                    },
+                    {"type": "text", "text": prompt}
+                ]
+            }
+        ]
         
-        result_text = response.choices[0].message.content
+        result_text = self._call_api_with_retry(messages, max_tokens=1000)
         return self._parse_json_response(result_text)
         
     def analyze_scene(self, screen: np.ndarray) -> VisualAnalysis:
         """
         Analyze current game scene
         """
-        config = self._ensure_client()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{self._image_to_base64(screen)}",
+                            "detail": "high"
+                        }
+                    },
+                    {"type": "text", "text": self.SCENE_ANALYSIS_PROMPT}
+                ]
+            }
+        ]
         
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._image_to_base64(screen)}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": self.SCENE_ANALYSIS_PROMPT}
-                    ]
-                }
-            ],
-            max_tokens=800,
-            temperature=0.3
-        )
-        
-        result_text = response.choices[0].message.content
+        result_text = self._call_api_with_retry(messages, max_tokens=800)
         data = self._parse_json_response(result_text)
         
         return VisualAnalysis(
@@ -211,39 +233,32 @@ class AIVisualAnalyzer:
         """
         Compare current screen with a reference frame from guide video
         """
-        config = self._ensure_client()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "参考画面（攻略视频截图）："},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{self._image_to_base64(reference_frame)}",
+                            "detail": "high"
+                        }
+                    },
+                    {"type": "text", "text": "当前画面（游戏实时截图）："},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{self._image_to_base64(current_screen)}",
+                            "detail": "high"
+                        }
+                    },
+                    {"type": "text", "text": self.COMPARISON_PROMPT}
+                ]
+            }
+        ]
         
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "参考画面（攻略视频截图）："},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._image_to_base64(reference_frame)}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": "当前画面（游戏实时截图）："},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._image_to_base64(current_screen)}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": self.COMPARISON_PROMPT}
-                    ]
-                }
-            ],
-            max_tokens=800,
-            temperature=0.3
-        )
-        
-        result_text = response.choices[0].message.content
+        result_text = self._call_api_with_retry(messages, max_tokens=800)
         return self._parse_json_response(result_text)
         
     def find_click_target(
@@ -261,8 +276,6 @@ class AIVisualAnalyzer:
         Returns:
             (x, y) pixel coordinates to click, or None if not found
         """
-        config = self._ensure_client()
-        
         h, w = screen.shape[:2]
         
         prompt = f"""在这张原神游戏截图中找到"{target_description}"的位置。
@@ -281,28 +294,23 @@ class AIVisualAnalyzer:
 }}
 ```"""
 
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{self._image_to_base64(screen)}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": prompt}
-                    ]
-                }
-            ],
-            max_tokens=300,
-            temperature=0.2
-        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{self._image_to_base64(screen)}",
+                            "detail": "high"
+                        }
+                    },
+                    {"type": "text", "text": prompt}
+                ]
+            }
+        ]
         
-        result_text = response.choices[0].message.content
+        result_text = self._call_api_with_retry(messages, max_tokens=300, temperature=0.2)
         data = self._parse_json_response(result_text)
         
         if data.get('found'):

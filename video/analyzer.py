@@ -265,7 +265,8 @@ class VideoAnalyzer:
     def analyze_frames(
         self, 
         frames: List[VideoFrame],
-        context: str = ""
+        context: str = "",
+        log_callback = None
     ) -> List[GuideStep]:
         """
         Analyze a batch of frames and extract steps
@@ -273,9 +274,10 @@ class VideoAnalyzer:
         Args:
             frames: List of video frames to analyze
             context: Additional context about the video
+            log_callback: Optional callback(message) for logging
         """
         config = self._ensure_client()
-            
+        
         # Prepare messages with images
         content = []
         
@@ -305,22 +307,43 @@ class VideoAnalyzer:
                 "text": f"[图片 {i+1}，时间戳: {frame.timestamp:.1f}秒]"
             })
             
-        # Make API call
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=[
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": content}
-            ],
-            max_tokens=4096,
-            temperature=0.3
-        )
+        # Make API call with retry
+        max_retries = 3
+        last_error = None
         
-        # Parse response
-        result_text = response.choices[0].message.content
-        steps = self._parse_steps(result_text, frames)
-        
-        return steps
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=config.openai_model,
+                    messages=[
+                        {"role": "system", "content": self.SYSTEM_PROMPT},
+                        {"role": "user", "content": content}
+                    ],
+                    max_tokens=4096,
+                    temperature=0.3
+                )
+                
+                # Parse response
+                result_text = response.choices[0].message.content
+                steps = self._parse_steps(result_text, frames)
+                return steps
+                
+            except Exception as e:
+                last_error = e
+                error_msg = f"API调用失败 (尝试 {attempt+1}/{max_retries}): {str(e)}"
+                print(error_msg)
+                if log_callback:
+                    log_callback(error_msg)
+                
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2)  # Wait before retry
+                    
+        # If all retries failed
+        if log_callback:
+            log_callback(f"❌ API分析最终失败: {str(last_error)}")
+            
+        return []
         
     def _parse_steps(self, text: str, frames: List[VideoFrame]) -> List[GuideStep]:
         """Parse steps from API response"""
@@ -480,7 +503,12 @@ class VideoAnalyzer:
                     last_steps = all_steps[-3:]
                     context = "前面的步骤：" + "; ".join(s.description for s in last_steps)
                     
-                batch_steps = self.analyze_frames(batch_frames, context)
+                # Create a simple logger if callback exists
+                log_cb = None
+                if progress_callback:
+                    log_cb = lambda msg: progress_callback(progress, 100, msg)
+                    
+                batch_steps = self.analyze_frames(batch_frames, context, log_cb)
                 
                 # Renumber steps
                 for step in batch_steps:

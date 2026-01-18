@@ -139,31 +139,37 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.setSpacing(15)
         
-        # OpenAI settings group
-        openai_group = QGroupBox("OpenAI API")
-        openai_layout = QFormLayout(openai_group)
-        openai_layout.setSpacing(10)
+        # API Provider settings group
+        api_group = QGroupBox("API 设置")
+        api_layout = QFormLayout(api_group)
+        api_layout.setSpacing(10)
+        
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["OpenAI", "Gemini"])
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        api_layout.addRow("API 提供商:", self.provider_combo)
         
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("sk-...")
-        openai_layout.addRow("API Key:", self.api_key_input)
+        api_layout.addRow("API Key:", self.api_key_input)
         
         self.base_url_input = QLineEdit()
         self.base_url_input.setPlaceholderText("https://api.openai.com/v1")
-        openai_layout.addRow("Base URL:", self.base_url_input)
+        api_layout.addRow("Base URL:", self.base_url_input)
+        
+        layout.addWidget(api_group)
+        
+        # Model settings group
+        model_group = QGroupBox("模型设置")
+        model_layout = QFormLayout(model_group)
+        model_layout.setSpacing(10)
         
         self.model_combo = QComboBox()
-        self.model_combo.addItems([
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-            "gpt-4-vision-preview",
-        ])
         self.model_combo.setEditable(True)
-        openai_layout.addRow("模型:", self.model_combo)
+        model_layout.addRow("模型:", self.model_combo)
         
-        layout.addWidget(openai_group)
+        layout.addWidget(model_group)
         
         # Info label
         info_label = QLabel(
@@ -326,12 +332,57 @@ class SettingsDialog(QDialog):
                 }
             """)
             
+    def _on_provider_changed(self, index: int):
+        """Handle provider change"""
+        provider = self.provider_combo.currentText().lower()
+        
+        # Update models
+        self.model_combo.clear()
+        if provider == "openai":
+            self.model_combo.addItems([
+                "gpt-4o",
+                "gpt-4o-mini",
+                "gpt-4-turbo",
+                "gpt-4-vision-preview",
+            ])
+            default_url = "https://api.openai.com/v1"
+        else:  # gemini
+            self.model_combo.addItems([
+                "gemini-2.0-flash-exp",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-8b",
+            ])
+            default_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+            
+        # Update Base URL placeholder
+        self.base_url_input.setPlaceholderText(default_url)
+        
+        # Set default URL if current is empty or matches other default
+        current_url = self.base_url_input.text().strip()
+        openai_default = "https://api.openai.com/v1"
+        gemini_default = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        
+        if not current_url or current_url in [openai_default, gemini_default]:
+            self.base_url_input.setText(default_url)
+            
     def load_settings(self):
         """Load settings from config"""
         # API settings
-        self.api_key_input.setText(self.config.openai_api_key)
-        self.base_url_input.setText(self.config.openai_base_url)
+        api_provider = getattr(self.config, 'api_provider', 'openai')
+        provider_idx = 0 if api_provider == 'openai' else 1
+        self.provider_combo.setCurrentIndex(provider_idx)
         
+        # Trigger change handler to set models and defaults
+        self._on_provider_changed(provider_idx)
+        
+        self.api_key_input.setText(self.config.openai_api_key)
+        
+        # Override URL if set and different from default
+        if self.config.openai_base_url:
+            self.base_url_input.setText(self.config.openai_base_url)
+        
+        # Select model
         idx = self.model_combo.findText(self.config.openai_model)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
@@ -362,8 +413,9 @@ class SettingsDialog(QDialog):
     def save_settings(self):
         """Save settings to config"""
         # API settings
+        self.config.api_provider = self.provider_combo.currentText().lower()
         self.config.openai_api_key = self.api_key_input.text().strip()
-        self.config.openai_base_url = self.base_url_input.text().strip() or "https://api.openai.com/v1"
+        self.config.openai_base_url = self.base_url_input.text().strip()
         self.config.openai_model = self.model_combo.currentText()
         
         # Game settings

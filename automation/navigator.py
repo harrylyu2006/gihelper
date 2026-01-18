@@ -48,15 +48,17 @@ class Navigator:
         self,
         controller: Optional[GameController] = None,
         screen_capture: Optional[ScreenCapture] = None,
-        detector: Optional[GameDetector] = None
+        detector: Optional[GameDetector] = None,
+        log_callback=None
     ):
         self.controller = controller or GameController()
         self.screen = screen_capture or ScreenCapture()
         self.detector = detector or GameDetector()
+        self.log_callback = log_callback
         
         # Image recognition components
         self.template_matcher = TemplateMatcher()
-        self.ai_vision = AIVisualAnalyzer()
+        self.ai_vision = AIVisualAnalyzer(log_callback=log_callback)
         
         self.state = NavigationState.IDLE
         self.is_running = False

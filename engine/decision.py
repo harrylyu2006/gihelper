@@ -71,7 +71,8 @@ class DecisionEngine:
         self.navigator = Navigator(
             controller=self.controller,
             screen_capture=self.screen,
-            detector=self.detector
+            detector=self.detector,
+            log_callback=self.log
         )
         
         # State

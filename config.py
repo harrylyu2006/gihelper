@@ -11,7 +11,8 @@ from typing import Optional
 @dataclass
 class Config:
     """Application configuration"""
-    # OpenAI API settings
+    # OpenAI / Gemini API settings
+    api_provider: str = "openai"  # "openai" or "gemini"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
     openai_base_url: str = "https://api.openai.com/v1"
