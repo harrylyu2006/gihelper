@@ -276,22 +276,45 @@ class DecisionEngine:
         
     def _execute_step(self, step: GuideStep) -> bool:
         """Execute a single step"""
+        # Handle wait_before if specified
+        if step.wait_before:
+            time.sleep(step.wait_before)
+            
         action_handlers = {
+            # Movement
             ActionType.MOVE: self._handle_move,
-            ActionType.INTERACT: self._handle_interact,
-            ActionType.ATTACK: self._handle_attack,
+            ActionType.SPRINT: self._handle_sprint,
+            ActionType.JUMP: self._handle_jump,
             ActionType.CLIMB: self._handle_climb,
             ActionType.GLIDE: self._handle_glide,
             ActionType.SWIM: self._handle_swim,
+            ActionType.PLUNGE: self._handle_plunge,
+            # Interaction
+            ActionType.INTERACT: self._handle_interact,
+            ActionType.ATTACK: self._handle_attack,
+            ActionType.CHARGED_ATTACK: self._handle_charged_attack,
+            ActionType.ELEMENTAL_SKILL: self._handle_elemental_skill,
+            ActionType.ELEMENTAL_BURST: self._handle_elemental_burst,
+            # Navigation
             ActionType.TELEPORT: self._handle_teleport,
             ActionType.OPEN_MAP: self._handle_open_map,
+            ActionType.USE_GADGET: self._handle_use_gadget,
+            # Other
             ActionType.DIALOG: self._handle_dialog,
             ActionType.WAIT: self._handle_wait,
+            ActionType.KEY_PRESS: self._handle_key_press,
+            ActionType.MOUSE_CLICK: self._handle_mouse_click,
             ActionType.CUSTOM: self._handle_custom,
         }
         
         handler = action_handlers.get(step.action_type, self._handle_custom)
-        return handler(step)
+        result = handler(step)
+        
+        # Handle wait_after if specified
+        if step.wait_after:
+            time.sleep(step.wait_after)
+            
+        return result
         
     # ================== Action Handlers ==================
     
@@ -389,12 +412,91 @@ class DecisionEngine:
     def _handle_wait(self, step: GuideStep) -> bool:
         """Handle wait action"""
         duration = step.duration or 2.0
+        self.log(f"⏳ 等待 {duration} 秒...")
         time.sleep(duration)
         return True
         
+    def _handle_jump(self, step: GuideStep) -> bool:
+        """Handle jump action"""
+        result = self.controller.jump()
+        return result.success
+        
+    def _handle_sprint(self, step: GuideStep) -> bool:
+        """Handle sprint action"""
+        duration = step.duration or 2.0
+        direction = step.direction or "forward"
+        
+        self.controller.sprint_start()
+        result = self.controller.move_direction(direction, duration)
+        self.controller.sprint_stop()
+        return result.success
+        
+    def _handle_plunge(self, step: GuideStep) -> bool:
+        """Handle plunge attack (while gliding/falling)"""
+        result = self.controller.attack()
+        return result.success
+        
+    def _handle_charged_attack(self, step: GuideStep) -> bool:
+        """Handle charged attack (hold click)"""
+        duration = step.duration or 1.0
+        result = self.controller.charged_attack(duration)
+        return result.success
+        
+    def _handle_elemental_skill(self, step: GuideStep) -> bool:
+        """Handle elemental skill (E key)"""
+        hold = step.hold_key or False
+        duration = step.duration or 1.0
+        
+        self.log(f"⚡ {'长按' if hold else '按下'} E 元素战技")
+        result = self.controller.elemental_skill(hold=hold, hold_time=duration)
+        return result.success
+        
+    def _handle_elemental_burst(self, step: GuideStep) -> bool:
+        """Handle elemental burst (Q key)"""
+        self.log("💥 按下 Q 元素爆发")
+        result = self.controller.elemental_burst()
+        return result.success
+        
+    def _handle_use_gadget(self, step: GuideStep) -> bool:
+        """Handle use gadget (T key)"""
+        self.log(f"🔧 按下 T 使用道具: {step.target or '小道具'}")
+        result = self.controller.press_key('t')
+        time.sleep(0.5)
+        return result.success
+        
+    def _handle_key_press(self, step: GuideStep) -> bool:
+        """Handle generic key press"""
+        key = step.key_to_press or 'f'
+        
+        if step.hold_key and step.duration:
+            self.log(f"⌨️ 长按 {key.upper()} {step.duration}秒")
+            self.controller.hold_key(key)
+            time.sleep(step.duration)
+            self.controller.release_key(key)
+            return True
+        else:
+            self.log(f"⌨️ 按下 {key.upper()}")
+            result = self.controller.press_key(key)
+            return result.success
+            
+    def _handle_mouse_click(self, step: GuideStep) -> bool:
+        """Handle mouse click at position"""
+        # This would need screen coordinates - use AI to find target
+        if step.target:
+            self.log(f"🖱️ 点击: {step.target}")
+            screen = self.screen.capture_full_screen(monitor=1)
+            click_pos = self.navigator.ai_vision.find_click_target(screen, step.target)
+            if click_pos:
+                self.controller.click_at(click_pos[0], click_pos[1])
+                return True
+        return False
+        
     def _handle_custom(self, step: GuideStep) -> bool:
         """Handle custom/unknown action"""
-        # Use AI to figure out what to do
+        # If there's a specific key to press, use it
+        if step.key_to_press:
+            return self._handle_key_press(step)
+        # Otherwise use AI to figure out what to do
         return self._ai_decide_action(step)
         
     # ================== AI Decision Making ==================

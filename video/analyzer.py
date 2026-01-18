@@ -15,16 +15,32 @@ from config import get_config
 
 class ActionType(Enum):
     """Types of actions in the game"""
+    # Movement
     MOVE = "move"  # Move in a direction
-    INTERACT = "interact"  # Press F to interact
-    ATTACK = "attack"  # Attack/break something
+    SPRINT = "sprint"  # Sprint/run
+    JUMP = "jump"  # Jump
     CLIMB = "climb"  # Climb
     GLIDE = "glide"  # Glide
     SWIM = "swim"  # Swim
+    PLUNGE = "plunge"  # Plunge attack while gliding
+    
+    # Interaction
+    INTERACT = "interact"  # Press F to interact
+    ATTACK = "attack"  # Attack/break something
+    CHARGED_ATTACK = "charged_attack"  # Hold attack
+    ELEMENTAL_SKILL = "elemental_skill"  # E skill
+    ELEMENTAL_BURST = "elemental_burst"  # Q burst
+    
+    # Navigation
     TELEPORT = "teleport"  # Teleport to waypoint
     OPEN_MAP = "open_map"  # Open map
+    USE_GADGET = "use_gadget"  # Press T to use gadget
+    
+    # Other
     DIALOG = "dialog"  # Handle dialog
     WAIT = "wait"  # Wait for something
+    KEY_PRESS = "key_press"  # Press specific key
+    MOUSE_CLICK = "mouse_click"  # Click at position
     CUSTOM = "custom"  # Custom action
 
 
@@ -34,12 +50,32 @@ class GuideStep:
     step_number: int
     action_type: ActionType
     description: str
-    direction: Optional[str] = None  # For move actions: north, south, east, west, etc.
-    duration: Optional[float] = None  # How long to perform action
+    
+    # Movement details
+    direction: Optional[str] = None  # forward, backward, left, right, north, south, etc.
+    duration: Optional[float] = None  # How long to perform action (seconds)
+    distance: Optional[str] = None  # Description of distance (e.g., "10米", "到树旁边")
+    
+    # Interaction details
     target: Optional[str] = None  # What to interact with
     landmark: Optional[str] = None  # Nearby landmark for reference
+    
+    # Key press details
+    key_to_press: Optional[str] = None  # Specific key: 'f', 't', 'e', 'q', 'space', etc.
+    hold_key: bool = False  # Whether to hold the key
+    
+    # Teleport details
+    teleport_location: Optional[str] = None  # Exact waypoint name
+    region: Optional[str] = None  # Region name (e.g., "璃月", "蒙德")
+    
+    # Timing
+    wait_before: Optional[float] = None  # Wait before action (seconds)
+    wait_after: Optional[float] = None  # Wait after action (seconds)
+    
+    # Video reference
     frame_number: Optional[int] = None  # Associated video frame
     timestamp: Optional[float] = None  # Video timestamp
+    subtitle_text: Optional[str] = None  # Subtitle/caption at this moment
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -51,6 +87,7 @@ class GuideStep:
     def from_dict(cls, data: Dict[str, Any]) -> 'GuideStep':
         """Create from dictionary"""
         data['action_type'] = ActionType(data['action_type'])
+        return cls(**data)
         return cls(**data)
 
 
@@ -96,43 +133,108 @@ class AnalysisResult:
 class VideoAnalyzer:
     """Analyzes guide videos using GPT-4 Vision"""
     
-    SYSTEM_PROMPT = """你是一个原神游戏攻略分析专家。你的任务是分析攻略视频的截图，提取出详细的操作步骤指引。
+    SYSTEM_PROMPT = """你是一个原神游戏攻略视频分析专家。你的任务是从攻略视频截图中提取出精确、可执行的操作步骤。
 
-对于每一张图片，你需要识别：
-1. 当前的游戏场景/位置
-2. 视频中显示的指引文字或提示
-3. 需要执行的具体操作
+## 分析要求
 
-请用结构化的JSON格式输出每个步骤，包含以下字段：
-- step_number: 步骤编号
-- action_type: 操作类型 (move/interact/attack/climb/glide/swim/teleport/open_map/dialog/wait/custom)
-- description: 详细描述
-- direction: 移动方向 (如果是移动操作)
-- target: 交互目标 (如果有)
-- landmark: 参考地标
+对于每一张图片，仔细识别：
 
-输出格式示例：
+### 1. 画面内容
+- 当前游戏界面状态（大世界/地图/菜单/对话）
+- 场景位置和环境特征
+- 可见的交互物体（宝箱、神瞳、NPC、采集物等）
+- UI提示（左下角按键提示、任务目标等）
+
+### 2. 视频中的文字信息 ⚠️ 非常重要
+- **字幕/解说文字**：通常在画面底部，包含操作指引
+- **视频制作者的标注**：箭头、圆圈、文字说明
+- **弹幕信息**（如果有）
+- **按键提示**：如"按F拾取"、"按T使用道具"、"长按E"等
+
+### 3. 需要执行的具体操作
+识别以下操作类型及其详细参数：
+
+| 操作类型 | action_type | 需要的参数 |
+|---------|-------------|-----------|
+| 传送 | teleport | teleport_location(传送点名), region(区域) |
+| 移动 | move | direction(方向), duration(时长), landmark(参照物) |
+| 冲刺 | sprint | duration(时长) |
+| 跳跃 | jump | - |
+| 交互 | interact | target(目标), key_to_press(按键，默认F) |
+| 攻击 | attack | target(目标) |
+| 重击 | charged_attack | duration(蓄力时长) |
+| 元素战技 | elemental_skill | hold_key(是否长按) |
+| 元素爆发 | elemental_burst | - |
+| 使用道具 | use_gadget | target(道具名) |
+| 攀爬 | climb | duration(时长) |
+| 滑翔 | glide | direction(方向), duration(时长) |
+| 下落攻击 | plunge | - |
+| 游泳 | swim | direction(方向), duration(时长) |
+| 对话 | dialog | - |
+| 等待 | wait | duration(时长), target(等什么) |
+| 按键 | key_press | key_to_press(具体按键) |
+
+## 输出格式
+
 ```json
 {
+  "frame_info": {
+    "scene": "大世界/地图/菜单",
+    "location_description": "场景描述",
+    "subtitle_text": "字幕内容（如有）"
+  },
   "steps": [
     {
       "step_number": 1,
       "action_type": "teleport",
-      "description": "传送到望舒客栈",
-      "target": "望舒客栈传送点"
+      "description": "传送到璃月港西边的传送锚点",
+      "teleport_location": "璃月港-西",
+      "region": "璃月",
+      "key_to_press": null
     },
     {
       "step_number": 2,
       "action_type": "move",
-      "description": "向东走到悬崖边",
-      "direction": "east",
-      "landmark": "大树旁边"
+      "description": "向前走到崖边的大树旁",
+      "direction": "forward",
+      "duration": 3.0,
+      "distance": "约10米",
+      "landmark": "崖边大树"
+    },
+    {
+      "step_number": 3,
+      "action_type": "interact",
+      "description": "按F拾取华丽宝箱",
+      "target": "华丽宝箱",
+      "key_to_press": "f"
+    },
+    {
+      "step_number": 4,
+      "action_type": "use_gadget",
+      "description": "按T使用风之翼",
+      "target": "风之翼",
+      "key_to_press": "t"
+    },
+    {
+      "step_number": 5,
+      "action_type": "elemental_skill",
+      "description": "长按E使用岩元素战技",
+      "hold_key": true,
+      "duration": 1.5
     }
   ]
 }
 ```
 
-请仔细分析每张图片，确保步骤准确、详细、可执行。"""
+## 关键提示
+
+1. **字幕最重要**：字幕通常直接告诉你该做什么，如"这里跳下去"、"按T使用道具"
+2. **方向要准确**：根据小地图或画面判断，使用 forward/left/right/backward
+3. **按键要明确**：F=交互、T=道具、E=元素战技、Q=元素爆发、Space=跳跃
+4. **时长估算**：根据画面变化估算操作持续时间
+5. **传送点名称**：尽量给出完整的传送点名称，如"望舒客栈"而非"那个传送点"
+
+请仔细分析每张图片，确保步骤准确、详细、可直接执行。"""
 
     def __init__(self):
         self.client: Optional[OpenAI] = None
@@ -223,25 +325,52 @@ class VideoAnalyzer:
     def _parse_steps(self, text: str, frames: List[VideoFrame]) -> List[GuideStep]:
         """Parse steps from API response"""
         steps = []
+        frame_info = {}
         
         # Try to extract JSON from response
         json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
         if json_match:
             try:
                 data = json.loads(json_match.group(1))
+                
+                # Extract frame info if present
+                frame_info = data.get('frame_info', {})
+                
                 if 'steps' in data:
                     for step_data in data['steps']:
+                        # Get action type safely
+                        action_str = step_data.get('action_type', 'custom')
+                        try:
+                            action_type = ActionType(action_str)
+                        except ValueError:
+                            action_type = ActionType.CUSTOM
+                            
                         step = GuideStep(
                             step_number=step_data.get('step_number', len(steps) + 1),
-                            action_type=ActionType(step_data.get('action_type', 'custom')),
+                            action_type=action_type,
                             description=step_data.get('description', ''),
+                            # Movement
                             direction=step_data.get('direction'),
                             duration=step_data.get('duration'),
+                            distance=step_data.get('distance'),
+                            # Interaction
                             target=step_data.get('target'),
-                            landmark=step_data.get('landmark')
+                            landmark=step_data.get('landmark'),
+                            # Key press
+                            key_to_press=step_data.get('key_to_press'),
+                            hold_key=step_data.get('hold_key', False),
+                            # Teleport
+                            teleport_location=step_data.get('teleport_location'),
+                            region=step_data.get('region'),
+                            # Timing
+                            wait_before=step_data.get('wait_before'),
+                            wait_after=step_data.get('wait_after'),
+                            # Subtitle from frame_info
+                            subtitle_text=frame_info.get('subtitle_text')
                         )
                         steps.append(step)
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                print(f"JSON parsing error: {e}")
                 pass
                 
         # If JSON parsing failed, try to parse text
