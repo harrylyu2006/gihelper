@@ -49,6 +49,10 @@ class MainWindow(QMainWindow):
     status_changed = pyqtSignal(str)
     log_message = pyqtSignal(str)
     
+    # Thread-safe signals for engine callbacks
+    engine_progress_signal = pyqtSignal(object)  # ExecutionProgress
+    engine_log_signal = pyqtSignal(str)
+    
     def __init__(self):
         super().__init__()
         self.config = get_config()
@@ -57,9 +61,14 @@ class MainWindow(QMainWindow):
         
         # Initialize decision engine
         self.engine = DecisionEngine()
-        self.engine.on_progress = self._on_engine_progress
-        self.engine.on_log = self._on_engine_log
+        # Use lambda to emit signals (thread-safe)
+        self.engine.on_progress = lambda p: self.engine_progress_signal.emit(p)
+        self.engine.on_log = lambda m: self.engine_log_signal.emit(m)
         self.guide_loaded = False
+        
+        # Connect signals to slots
+        self.engine_progress_signal.connect(self._on_engine_progress)
+        self.engine_log_signal.connect(self._on_engine_log)
         
         self.init_ui()
         self.setup_signals()
