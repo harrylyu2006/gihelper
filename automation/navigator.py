@@ -9,6 +9,8 @@ from enum import Enum
 from .controller import GameController, ActionResult
 from screen.capture import ScreenCapture
 from screen.detector import GameDetector, GameState, DetectedObject
+from screen.template_matcher import TemplateMatcher
+from screen.ai_vision import AIVisualAnalyzer
 
 
 class NavigationState(Enum):
@@ -51,6 +53,10 @@ class Navigator:
         self.controller = controller or GameController()
         self.screen = screen_capture or ScreenCapture()
         self.detector = detector or GameDetector()
+        
+        # Image recognition components
+        self.template_matcher = TemplateMatcher()
+        self.ai_vision = AIVisualAnalyzer()
         
         self.state = NavigationState.IDLE
         self.is_running = False
@@ -195,32 +201,180 @@ class Navigator:
         """
         # Click on waypoint
         self.controller.click_at(waypoint_screen_x, waypoint_screen_y)
-        time.sleep(0.5)
+        time.sleep(0.8)
         
-        # Look for teleport button (usually appears near bottom right)
-        # This is a simplified version - real implementation would detect the button
+        # Try to find teleport button using template matching first
         screen = self.get_current_screen()
-        h, w = screen.shape[:2]
+        teleport_btn = self.template_matcher.find_teleport_button(screen)
         
-        # Teleport button is usually in the bottom right panel
-        teleport_x = int(w * 0.85)
-        teleport_y = int(h * 0.75)
-        
-        self.controller.click_at(teleport_x, teleport_y)
+        if teleport_btn:
+            self.controller.click_at(teleport_btn.center[0], teleport_btn.center[1])
+        else:
+            # Fallback: use AI to find the teleport button
+            click_pos = self.ai_vision.find_click_target(screen, "传送按钮")
+            if click_pos:
+                self.controller.click_at(click_pos[0], click_pos[1])
+            else:
+                # Last resort: estimated position
+                h, w = screen.shape[:2]
+                self.controller.click_at(int(w * 0.85), int(h * 0.75))
+                
         time.sleep(0.5)
         
         # Wait for teleport (loading screen)
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            state = self.check_game_state()
-            if state == GameState.LOADING:
-                # Wait for loading to complete
-                time.sleep(1)
-            elif state == GameState.WORLD:
-                return ActionResult(True, "Teleported successfully")
+        return self._wait_for_teleport_complete()
+        
+    def teleport_to_location(
+        self,
+        location_name: str,
+        max_retries: int = 3
+    ) -> ActionResult:
+        """
+        Teleport to a location by name using AI vision
+        
+        This is the main teleport method that:
+        1. Opens the map
+        2. Uses AI to find the target location
+        3. Clicks on it and teleports
+        
+        Args:
+            location_name: Name of the location (e.g., "望舒客栈", "蒙德城")
+        """
+        # Make sure map is open
+        if self.check_game_state() != GameState.MAP:
+            if not self.open_map_and_wait():
+                return ActionResult(False, "Failed to open map")
+                
+        for attempt in range(max_retries):
+            screen = self.get_current_screen()
+            
+            # Use AI to analyze map and find target
+            analysis = self.ai_vision.analyze_map_for_teleport(screen, location_name)
+            
+            if analysis.get('target_found'):
+                # Get click position
+                x_pct = analysis.get('click_position', {}).get('x_percent', 50)
+                y_pct = analysis.get('click_position', {}).get('y_percent', 50)
+                
+                h, w = screen.shape[:2]
+                click_x = int(w * x_pct / 100)
+                click_y = int(h * y_pct / 100)
+                
+                # Click on the waypoint
+                result = self.teleport_to_waypoint(click_x, click_y)
+                if result.success:
+                    return result
+                    
+            # If not found or failed, try scrolling/zooming the map
+            if attempt < max_retries - 1:
+                self._try_adjust_map_view(location_name)
+                time.sleep(0.5)
+                
+        return ActionResult(False, f"Could not find or teleport to: {location_name}")
+        
+    def search_on_map(self, search_text: str) -> bool:
+        """
+        Use the in-game map search function
+        
+        Opens search box and types the location name
+        """
+        # The search box is usually opened by clicking the search icon
+        # or pressing a hotkey (this varies by game version)
+        
+        screen = self.get_current_screen()
+        h, w = screen.shape[:2]
+        
+        # Try to find search button/icon
+        search_pos = self.ai_vision.find_click_target(screen, "搜索按钮或搜索图标")
+        
+        if search_pos:
+            self.controller.click_at(search_pos[0], search_pos[1])
+            time.sleep(0.3)
+            
+            # Type the search text
+            self.controller.type_text(search_text)
             time.sleep(0.5)
             
+            # Press Enter to search
+            self.controller.press_key('enter')
+            time.sleep(0.5)
+            
+            return True
+            
+        return False
+        
+    def find_waypoints_on_map(self) -> List[Tuple[int, int, str]]:
+        """
+        Find all visible waypoints on the current map view
+        
+        Returns:
+            List of (x, y, type) tuples for each waypoint
+        """
+        screen = self.get_current_screen()
+        
+        # Use template matching to find waypoint icons
+        matches = self.template_matcher.find_all_waypoints(screen)
+        
+        waypoints = []
+        for match in matches:
+            waypoints.append((
+                match.center[0],
+                match.center[1],
+                match.template_name
+            ))
+            
+        return waypoints
+        
+    def click_nearest_waypoint(self) -> ActionResult:
+        """Click on the nearest visible waypoint"""
+        waypoints = self.find_waypoints_on_map()
+        
+        if not waypoints:
+            return ActionResult(False, "No waypoints found")
+            
+        screen = self.get_current_screen()
+        h, w = screen.shape[:2]
+        center = (w // 2, h // 2)
+        
+        # Find closest to center
+        closest = min(
+            waypoints,
+            key=lambda wp: (wp[0] - center[0])**2 + (wp[1] - center[1])**2
+        )
+        
+        return self.teleport_to_waypoint(closest[0], closest[1])
+        
+    def _wait_for_teleport_complete(self, timeout: float = 15.0) -> ActionResult:
+        """Wait for teleport to complete"""
+        start_time = time.time()
+        loading_started = False
+        
+        while time.time() - start_time < timeout:
+            state = self.check_game_state()
+            
+            if state == GameState.LOADING:
+                loading_started = True
+                time.sleep(0.5)
+            elif state == GameState.WORLD:
+                if loading_started:
+                    return ActionResult(True, "Teleport successful")
+                # Might still be waiting for loading to start
+                time.sleep(0.3)
+            else:
+                time.sleep(0.3)
+                
         return ActionResult(False, "Teleport timeout")
+        
+    def _try_adjust_map_view(self, target_location: str):
+        """Try to adjust map view to find the target location"""
+        # Could implement pan/zoom logic here
+        # For now, just zoom out a bit
+        screen = self.get_current_screen()
+        h, w = screen.shape[:2]
+        
+        # Scroll to zoom out (mouse wheel)
+        self.controller.scroll(-3, int(w/2), int(h/2))
+        time.sleep(0.3)
         
     # ================== Object Collection ==================
     

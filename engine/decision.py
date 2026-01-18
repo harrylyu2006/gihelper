@@ -348,20 +348,34 @@ class DecisionEngine:
         return result.success
         
     def _handle_teleport(self, step: GuideStep) -> bool:
-        """Handle teleport action"""
-        # Open map
-        if not self.navigator.open_map_and_wait():
-            return False
+        """Handle teleport action using AI vision"""
+        target = step.target or step.description
+        self.log(f"🗺️ 正在传送到: {target}")
+        
+        # Use AI-powered teleport
+        result = self.navigator.teleport_to_location(target)
+        
+        if result.success:
+            self.log(f"✅ 传送成功")
+            # Wait a moment after teleport
+            time.sleep(2)
+            return True
+        else:
+            self.log(f"⚠️ 自动传送失败，尝试备用方法...")
             
-        # TODO: Find waypoint on map and click
-        # For now, just log and return success (user needs to do manually)
-        self.log(f"🗺️ 请手动传送到: {step.target or step.description}")
-        time.sleep(5)  # Give user time to teleport
-        
-        # Close map if still open
-        self.navigator.close_map()
-        
-        return True
+            # Fallback: open map and try template matching
+            if not self.navigator.open_map_and_wait():
+                return False
+                
+            # Try clicking nearest waypoint as fallback
+            result = self.navigator.click_nearest_waypoint()
+            
+            if not result.success:
+                self.log(f"❌ 无法找到传送点，请手动传送到: {target}")
+                time.sleep(5)  # Give user time to teleport manually
+                
+            self.navigator.close_map()
+            return True
         
     def _handle_open_map(self, step: GuideStep) -> bool:
         """Handle open map action"""

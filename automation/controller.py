@@ -189,6 +189,31 @@ class GameController:
         """Rotate camera by dragging (for game camera control)"""
         return self.move_mouse_relative(dx, dy)
         
+    def scroll(self, clicks: int, x: int = None, y: int = None) -> ActionResult:
+        """
+        Scroll mouse wheel
+        
+        Args:
+            clicks: Number of scroll clicks (positive = up, negative = down)
+            x, y: Optional position to scroll at
+        """
+        if self.is_paused or self.is_emergency_stopped:
+            return ActionResult(False, "Controller is paused or stopped")
+            
+        try:
+            if x is not None and y is not None:
+                self.move_mouse(x, y)
+            
+            if self.mode == InputMode.PYAUTOGUI:
+                self._input.scroll(clicks)
+            else:
+                # pydirectinput scroll
+                self._input.scroll(clicks)
+            self._delay()
+            return ActionResult(True)
+        except Exception as e:
+            return ActionResult(False, str(e))
+        
     # ================== Keyboard Control ==================
     
     def press_key(self, key: str) -> ActionResult:
