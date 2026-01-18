@@ -210,6 +210,20 @@ class DecisionEngine:
                 self.log("❌ 无法检测到游戏窗口")
                 return
                 
+            # Special handling for initial teleport (Step 1)
+            if self.current_step == 0 and self.guide_steps:
+                first_step = self.guide_steps[0]
+                if first_step.action_type == ActionType.TELEPORT:
+                    self.log(f"🚀 准备执行初始传送: {first_step.description}")
+                    
+                    # Ensure we are in a state to teleport
+                    screen = self.screen.capture_full_screen(monitor=1)
+                    state = self.detector.detect_game_state(screen)
+                    
+                    if state == GameState.WORLD:
+                        self.log("🗺️ 打开地图准备传送...")
+                        self.navigator.open_map_and_wait()
+                    
             while self.current_step < len(self.guide_steps):
                 # Check stop event
                 if self._stop_event.is_set():
@@ -252,26 +266,53 @@ class DecisionEngine:
         """Wait for game to be ready"""
         self.log("🔍 检测游戏窗口...")
         
+        # Try to find and focus game window first
+        game_window = self.screen.find_game_window()
+        if game_window:
+            self.log(f"📺 找到游戏窗口: {game_window.title}")
+            self.screen.bring_window_to_front(game_window)
+            import time as t
+            t.sleep(0.5)  # Wait for window to come to front
+        else:
+            self.log("⚠️ 未找到原神窗口，尝试全屏截图...")
+        
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self._stop_event.is_set():
                 return False
                 
             try:
-                screen = self.screen.capture_full_screen(monitor=1)
+                # Capture screen
+                if game_window:
+                    screen = self.screen.capture_window(game_window)
+                else:
+                    screen = self.screen.capture_full_screen(monitor=1)
+                    
+                if screen is None:
+                    self.log("⚠️ 截图失败")
+                    time.sleep(0.5)
+                    continue
+                    
                 state = self.detector.detect_game_state(screen)
                 
+                # Accept WORLD or MAP states (map is fine, we can start from there)
                 if state == GameState.WORLD:
-                    self.log("✅ 检测到游戏画面")
+                    self.log("✅ 检测到游戏大世界画面")
+                    return True
+                elif state == GameState.MAP:
+                    self.log("✅ 检测到地图界面，可以开始")
                     return True
                 elif state == GameState.LOADING:
                     self.log("⏳ 游戏加载中...")
+                else:
+                    self.log(f"🔍 当前状态: {state.value}，继续等待...")
                     
-            except Exception:
-                pass
+            except Exception as e:
+                self.log(f"⚠️ 检测出错: {str(e)[:50]}")
                 
             time.sleep(0.5)
             
+        self.log("❌ 超时：无法检测到游戏窗口")
         return False
         
     def _execute_step(self, step: GuideStep) -> bool:
