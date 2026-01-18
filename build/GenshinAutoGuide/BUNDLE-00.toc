@@ -1,0 +1,3 @@
+([('GenshinAutoGuide',
+   '/Users/lvharry/Documents/antigravity/gihelper/dist/GenshinAutoGuide',
+   'EXECUTABLE')],)
