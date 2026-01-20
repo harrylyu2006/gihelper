@@ -54,34 +54,38 @@ class ScreenCapture:
     """Handles screen and window capture"""
     
     def __init__(self):
-        self.sct = None
-        if MSS_AVAILABLE:
-            self.sct = mss.mss()
+        # We don't initialize persistent mss here anymore to avoid threading issues
+        # on macOS. Instead we create a new instance for each capture.
+        pass
             
-    def capture_full_screen(self, monitor: int = 0) -> np.ndarray:
+    def capture_full_screen(self, monitor: int = 1) -> np.ndarray:
         """
         Capture full screen
         
         Args:
-            monitor: Monitor index (0 = all monitors, 1 = first monitor, etc.)
+            monitor: Monitor index (1 = first monitor)
             
         Returns:
             RGB numpy array
         """
-        if not self.sct:
+        if not MSS_AVAILABLE:
             raise RuntimeError("MSS not available for screen capture")
             
-        # Get monitor info
-        mon = self.sct.monitors[monitor]
-        
-        # Capture
-        screenshot = self.sct.grab(mon)
-        
-        # Convert to numpy array (BGRA format)
-        img = np.array(screenshot)
-        
-        # Convert BGRA to RGB
-        return img[:, :, :3][:, :, ::-1]
+        with mss.mss() as sct:
+            # Get monitor info (handle case where monitor index out of range)
+            if monitor >= len(sct.monitors):
+                monitor = 1  # Fallback to primary
+            
+            mon = sct.monitors[monitor]
+            
+            # Capture
+            screenshot = sct.grab(mon)
+            
+            # Convert to numpy array (BGRA format)
+            img = np.array(screenshot)
+            
+            # Convert BGRA to RGB
+            return img[:, :, :3][:, :, ::-1]
         
     def capture_region(
         self, 
@@ -96,19 +100,20 @@ class ScreenCapture:
         Returns:
             RGB numpy array
         """
-        if not self.sct:
+        if not MSS_AVAILABLE:
             raise RuntimeError("MSS not available for screen capture")
             
-        region = {
-            'left': left,
-            'top': top,
-            'width': width,
-            'height': height
-        }
-        
-        screenshot = self.sct.grab(region)
-        img = np.array(screenshot)
-        return img[:, :, :3][:, :, ::-1]
+        with mss.mss() as sct:
+            region = {
+                'left': int(left),
+                'top': int(top),
+                'width': int(width),
+                'height': int(height)
+            }
+            
+            screenshot = sct.grab(region)
+            img = np.array(screenshot)
+            return img[:, :, :3][:, :, ::-1]
         
     def capture_window(self, window_info: WindowInfo) -> Optional[np.ndarray]:
         """
